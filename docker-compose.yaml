@@ -1,0 +1,173 @@
+services:
+  mariadb:
+    image: mariadb:10.6
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+      - --skip-innodb-read-only-compressed
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    networks:
+      - erpnext-net
+
+  redis-cache:
+    image: redis:alpine
+    restart: unless-stopped
+    networks:
+      - erpnext-net
+
+  redis-queue:
+    image: redis:alpine
+    restart: unless-stopped
+    networks:
+      - erpnext-net
+
+  redis-socketio:
+    image: redis:alpine
+    restart: unless-stopped
+    networks:
+      - erpnext-net
+
+  backend:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: unless-stopped
+    depends_on:
+      - mariadb
+      - redis-cache
+      - redis-queue
+      - redis-socketio
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - DB_ROOT_USER=root
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - SITES_DB_ROOT_PASSWORD=${SITES_DB_ROOT_PASSWORD}
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+      - REDIS_SOCKETIO=redis-socketio:6379
+      - SOCKETIO_PORT=9000
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext-net
+
+  frontend:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - websocket
+    command:
+      - nginx-entrypoint.sh
+    environment:
+      - BACKEND=backend:8000
+      - SOCKETIO=websocket:9000
+      - FRAPPE_SITE_NAME_HEADER=${FRAPPE_SITE_NAME_HEADER:-site.localhost}
+      - UPSTREAM_REAL_IP_ADDRESS=127.0.0.1
+      - UPSTREAM_REAL_IP_HEADER=X-Forwarded-For
+      - UPSTREAM_REAL_IP_RECURSIVE=off
+      - PROXY_READ_TIMEOUT=120
+      - CLIENT_MAX_BODY_SIZE=50m
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+      - ./nginx-frappe.conf:/etc/nginx/conf.d/frappe.conf:ro
+    networks:
+      - erpnext-net
+      - portainer_default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=portainer_default"
+      - "traefik.http.routers.erpnext.rule=Host(`${ERP_DOMAIN}`)"
+      - "traefik.http.routers.erpnext.entrypoints=websecure"
+      - "traefik.http.routers.erpnext.tls=true"
+      - "traefik.http.routers.erpnext.tls.certresolver=leresolver"
+      - "traefik.http.services.erpnext.loadbalancer.server.port=8080"
+      - "traefik.http.routers.erpnext.service=erpnext"
+
+  websocket:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: unless-stopped
+    depends_on:
+      - redis-socketio
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext-net
+
+  scheduler:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: unless-stopped
+    command:
+      - bench
+      - schedule
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext-net
+
+  worker-default:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: unless-stopped
+    command:
+      - bench
+      - worker
+      - --queue
+      - default
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext-net
+
+  worker-short:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: unless-stopped
+    command:
+      - bench
+      - worker
+      - --queue
+      - short
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext-net
+
+  worker-long:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: unless-stopped
+    command:
+      - bench
+      - worker
+      - --queue
+      - long
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext-net
+
+volumes:
+  mariadb_data:
+    name: ${MARIADB_VOLUME:-erpnext-docker_mariadb_data}
+  sites:
+    name: ${SITES_VOLUME:-erpnext-docker_sites}
+  logs:
+    name: ${LOGS_VOLUME:-erpnext-docker_logs}
+
+networks:
+  erpnext-net:
+    name: erpnext-net
+  portainer_default:
+    external: true

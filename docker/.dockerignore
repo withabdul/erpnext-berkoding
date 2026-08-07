@@ -1,0 +1,5 @@
+*
+!Containerfile
+!resources/
+!resources/core/
+!resources/core/main-entrypoint.sh

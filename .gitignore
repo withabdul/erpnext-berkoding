@@ -1,0 +1,11 @@
+.env
+.env.*
+!.env.example
+
+backups/
+*.sql
+*.sql.gz
+*.log
+
+__pycache__/
+.DS_Store
