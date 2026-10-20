@@ -32,14 +32,45 @@ services:
     networks:
       - erpnext-net
 
+  configurator:
+    image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
+    restart: "no"
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        bench set-config -g db_host mariadb &&
+        bench set-config -gp db_port 3306 &&
+        bench set-config -g redis_cache "redis://redis-cache:6379" &&
+        bench set-config -g redis_queue "redis://redis-queue:6379" &&
+        bench set-config -g redis_socketio "redis://redis-socketio:6379" &&
+        bench set-config -gp socketio_port 9000
+    environment:
+      - DB_HOST=mariadb
+      - DB_PORT=3306
+      - REDIS_CACHE=redis-cache:6379
+      - REDIS_QUEUE=redis-queue:6379
+      - REDIS_SOCKETIO=redis-socketio:6379
+      - SOCKETIO_PORT=9000
+    volumes:
+      - sites:/home/frappe/frappe-bench/sites
+      - logs:/home/frappe/frappe-bench/logs
+    networks:
+      - erpnext-net
+
   backend:
     image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
     restart: unless-stopped
     depends_on:
-      - mariadb
-      - redis-cache
-      - redis-queue
-      - redis-socketio
+      mariadb:
+        condition: service_started
+      redis-cache:
+        condition: service_started
+      redis-queue:
+        condition: service_started
+      redis-socketio:
+        condition: service_started
+      configurator:
+        condition: service_completed_successfully
     environment:
       - DB_HOST=mariadb
       - DB_PORT=3306
@@ -76,17 +107,16 @@ services:
     volumes:
       - sites:/home/frappe/frappe-bench/sites
       - logs:/home/frappe/frappe-bench/logs
-      - ./nginx-frappe.conf:/etc/nginx/conf.d/frappe.conf:ro
     networks:
       - erpnext-net
-      - portainer_default
+      - traefik-net
     labels:
       - "traefik.enable=true"
-      - "traefik.docker.network=portainer_default"
+      - "traefik.docker.network=traefik-net"
       - "traefik.http.routers.erpnext.rule=Host(`${ERP_DOMAIN}`)"
       - "traefik.http.routers.erpnext.entrypoints=websecure"
       - "traefik.http.routers.erpnext.tls=true"
-      - "traefik.http.routers.erpnext.tls.certresolver=leresolver"
+      - "traefik.http.routers.erpnext.tls.certresolver=letsencrypt"
       - "traefik.http.services.erpnext.loadbalancer.server.port=8080"
       - "traefik.http.routers.erpnext.service=erpnext"
 
@@ -94,7 +124,10 @@ services:
     image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
     restart: unless-stopped
     depends_on:
-      - redis-socketio
+      redis-socketio:
+        condition: service_started
+      configurator:
+        condition: service_completed_successfully
     command:
       - node
       - /home/frappe/frappe-bench/apps/frappe/socketio.js
@@ -107,6 +140,9 @@ services:
   scheduler:
     image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
     restart: unless-stopped
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
     command:
       - bench
       - schedule
@@ -119,6 +155,9 @@ services:
   worker-default:
     image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
     restart: unless-stopped
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
     command:
       - bench
       - worker
@@ -133,6 +172,9 @@ services:
   worker-short:
     image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
     restart: unless-stopped
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
     command:
       - bench
       - worker
@@ -147,6 +189,9 @@ services:
   worker-long:
     image: ${ERP_IMAGE:-ghcr.io/withabdul/erpnext-berkoding:latest}
     restart: unless-stopped
+    depends_on:
+      configurator:
+        condition: service_completed_successfully
     command:
       - bench
       - worker
@@ -169,5 +214,5 @@ volumes:
 networks:
   erpnext-net:
     name: erpnext-net
-  portainer_default:
+  traefik-net:
     external: true
